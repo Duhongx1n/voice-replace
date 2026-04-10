@@ -4,6 +4,7 @@
 视频语音替换工具 - 命令行入口。
 
 完整流程：
+0. 自动检测并去除视频中的硬字幕（默认开启，可用 --no_subtitle 关闭）
 1. 从原始视频中提取语音并转写为文字（Whisper）
 2. 从原始视频中提取音色参考片段（Demucs + 智能筛选）
 3. 大模型智能生成/分句 - 根据主题自动创作新台词，或将自由格式台词按原视频节奏拆分
@@ -169,10 +170,14 @@ def parse_args() -> argparse.Namespace:
         help="跳过步骤 1-2（已有提取结果时使用）",
     )
 
-    # 字幕去除参数（默认关闭，需手动开启）
+    # 字幕去除参数（默认开启）
     parser.add_argument(
-        "--remove_subtitle", action="store_true",
-        help="启用字幕去除预处理（去除视频中的硬字幕）",
+        "--remove_subtitle", action="store_true", default=True,
+        help="启用字幕去除预处理（默认开启，去除视频中的硬字幕）",
+    )
+    parser.add_argument(
+        "--no_subtitle", action="store_true",
+        help="禁用字幕去除预处理（跳过字幕去除步骤）",
     )
     parser.add_argument(
         "--subtitle_mode", default="fast",
@@ -237,6 +242,10 @@ def main() -> int:
     print("=" * 60)
     print(f"  输入视频: {input_video}")
     print(f"  输出目录: {output_dir}")
+    # 处理字幕去除开关：--no_subtitle 优先级高于 --remove_subtitle
+    if args.no_subtitle:
+        args.remove_subtitle = False
+
     if args.remove_subtitle:
         print(f"  字幕去除: ✅ 已启用（模式: {args.subtitle_mode}）")
     else:

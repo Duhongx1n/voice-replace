@@ -9,6 +9,7 @@ build/
 
 # 虚拟环境
 .venv/
+.venv_paddle/
 venv/
 env/
 
@@ -29,6 +30,9 @@ Thumbs.db
 output/
 output_*/
 test_output/
+test_output_*/
+test_full_run_*/
+test_no_memory/
 
 # 测试脚本（包含本地路径，不适合上传）
 test_*.py

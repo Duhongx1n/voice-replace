@@ -11,8 +11,9 @@
 - [完整使用流程](#完整使用流程)
 - [命令行参数](#命令行参数)
 - [技术架构](#技术架构)
-- [字幕去除（可选）](#字幕去除可选)
+- [字幕去除](#字幕去除)
 - [常见问题](#常见问题)
+- [开发者指南](#开发者指南)
 
 ---
 
@@ -29,7 +30,7 @@
 - **背景音处理**：自动分离并混合背景音乐（BGM），同时抑制观众笑声等瞬态杂音
 - **声音克隆**：用原音色朗读新内容（Qwen3-TTS）
 - **时间轴对齐**：新语音按原视频的时间节奏精确插入，保持画面与语音同步
-- **字幕去除**（可选）：支持 FFmpeg 模糊 / PaddleOCR + inpainting / VSE 三种模式去除硬字幕
+- **字幕去除**（默认开启）：自动检测并去除硬字幕，支持 PaddleOCR 聚类检测 + FFmpeg 模糊 / inpainting / VSE 三种模式
 - **视频合成**：将新音频无损替换回原视频（FFmpeg）
 
 ### 三种台词模式
@@ -158,6 +159,7 @@ voice-replace --input video.mp4 --output_dir output \
 
 工具会自动完成以下全部步骤：
 
+0. **字幕去除**（默认开启）：自动检测并去除视频中的硬字幕
 1. **语音识别**：用 Whisper 提取原视频的语音文字和时间戳
 2. **音色提取**：用 Demucs 分离人声，智能筛选最佳参考片段
 3. **🧠 大模型创作台词**：分析原视频的对话结构（几句话、每句多长、哪些是短回应、哪些是长叙述），根据你给的主题方向自动创作匹配原视频节奏的全新台词
@@ -194,6 +196,7 @@ voice-replace --input video.mp4 --output_dir output \
 
 工具会自动完成以下全部步骤：
 
+0. **字幕去除**（默认开启）：自动检测并去除视频中的硬字幕
 1. **语音识别**：用 Whisper 提取原视频的语音文字和时间戳
 2. **音色提取**：用 Demucs 分离人声，智能筛选最佳参考片段
 3. **🤖 大模型智能分句**：自动检测新台词格式，调用大模型按原视频节奏拆分
@@ -278,7 +281,8 @@ voice-replace --input video.mp4 --output_dir output \
 | `--bgm_volume` | ❌ | `0.15` | 背景音音量比例（0.0~1.0，设为 0 等同禁用） |
 | `--no_bgm` | ❌ | `false` | 禁用背景音混合（仅保留新语音） |
 | `--skip_extract` | ❌ | `false` | 跳过步骤 1-2（已有提取结果时使用） |
-| `--remove_subtitle` | ❌ | `false` | 启用字幕去除预处理（去除视频中的硬字幕） |
+| `--remove_subtitle` | ❌ | `true` | 启用字幕去除预处理（默认开启，去除视频中的硬字幕） |
+| `--no_subtitle` | ❌ | `false` | 禁用字幕去除预处理（跳过字幕去除步骤） |
 | `--subtitle_mode` | ❌ | `fast` | 字幕去除模式（fast/auto/vse/smart） |
 | `--subtitle_region` | ❌ | 自动检测 | 手动指定字幕区域（格式: y_start,y_end,x_start,x_end） |
 | `--llm_api_key` | ❌ | 内置 HAI Key | 大模型 API Key（已内置，通常无需设置） |
@@ -319,6 +323,10 @@ voice-replace --input video.mp4 --output_dir output \
 ```
 输入视频 + 主题方向 / 新台词文本
   │
+  ├─ 步骤 0：字幕去除（默认开启）
+  │     ├─ PaddleOCR 聚类检测字幕区域（过滤水印/logo）
+  │     └─ FFmpeg 模糊去除（fast 模式）
+  │
   ├─ 步骤 1：Whisper 语音识别 ──→ 文字 + 时间戳
   │
   ├─ 步骤 2：Demucs 人声分离 ──→ 参考音色片段 + 背景音（BGM）
@@ -342,6 +350,8 @@ voice-replace --input video.mp4 --output_dir output \
 
 ```
 cli.py（命令行入口）
+  ├── subtitle_remover.py ← 字幕去除（默认开启，步骤 0）
+  │     └── paddle_ocr_bridge.py ← PaddleOCR 聚类检测
   ├── transcriber.py      ← Whisper 语音识别
   ├── voice_extractor.py  ← Demucs 音色提取
   ├── dialogue_analysis.py ← 🔥 对话结构分析（主题创作模式）
@@ -357,6 +367,7 @@ cli.py（命令行入口）
 
 | 技术 | 用途 | 说明 |
 |------|------|------|
+| PaddleOCR | 字幕检测 | Y 坐标聚类检测字幕区域（过滤水印/logo） |
 | OpenAI Whisper | 语音识别 | 提取语音文字和时间戳 |
 | Demucs | 人声分离 | 从混合音频中分离纯净人声 |
 | Qwen3-TTS | 语音合成 | 声音克隆 + 文本转语音 |
@@ -366,22 +377,36 @@ cli.py（命令行入口）
 
 ---
 
-## 字幕去除（可选）
+## 字幕去除
 
-如果原视频中有硬字幕（烧录在画面上的字幕），可以在处理前先去除，避免最终视频中出现原字幕。
+字幕去除功能**默认开启**，会在处理流程的最开始（步骤 0）自动检测并去除视频中的硬字幕。
 
-> **注意**：字幕去除默认**关闭**，需要手动添加 `--remove_subtitle` 参数开启。
+### 检测算法
+
+字幕区域检测采用 **PaddleOCR + Y 坐标聚类** 算法：
+
+1. **多帧采样**：均匀采样视频帧，用 PaddleOCR 检测画面底部 30% 区域的文字
+2. **置信度过滤**：过滤置信度 < 0.5 的低质量检测（水印、噪声等）
+3. **Y 坐标聚类**：将检测框按 Y 坐标聚类，筛选真正的字幕行
+4. **字幕特征筛选**：
+   - 宽度 ≥ 画面宽度的 20%（过滤小水印）
+   - 水平居中（过滤角落 logo）
+   - 多帧重复出现（过滤偶发噪声）
 
 ### 快速使用
 
 ```bash
-# 开启字幕去除（默认 FFmpeg 模糊模式，速度快）
+# 默认就会自动去除字幕，无需额外参数
 voice-replace --input video.mp4 --output_dir output \
-    --topic "你的主题" --remove_subtitle
+    --topic "你的主题"
 
-# 手动指定字幕区域（更精确）
+# 如果不想去除字幕，使用 --no_subtitle
 voice-replace --input video.mp4 --output_dir output \
-    --topic "你的主题" --remove_subtitle \
+    --topic "你的主题" --no_subtitle
+
+# 手动指定字幕区域（跳过自动检测，更精确）
+voice-replace --input video.mp4 --output_dir output \
+    --topic "你的主题" \
     --subtitle_region 680,720,100,1180
 ```
 
@@ -397,7 +422,7 @@ voice-replace --input video.mp4 --output_dir output \
 ```bash
 # 使用智能模式（需安装 PaddleOCR）
 voice-replace --input video.mp4 --output_dir output \
-    --topic "你的主题" --remove_subtitle --subtitle_mode smart
+    --topic "你的主题" --subtitle_mode smart
 
 # 安装智能模式依赖
 pip install paddlepaddle paddleocr opencv-python-headless
@@ -491,11 +516,12 @@ pip install edge-tts
 
 ### Q: 字幕去除效果不好？
 
-字幕去除默认使用 FFmpeg 模糊模式（`fast`），速度快但效果一般。如需更好效果：
+字幕去除默认开启，使用 PaddleOCR 聚类检测 + FFmpeg 模糊模式（`fast`），速度快且检测精确。如需更好的去除效果：
 
 1. **安装 PaddleOCR** 使用智能模式：`pip install paddlepaddle paddleocr opencv-python-headless`
-2. 运行时指定：`--remove_subtitle --subtitle_mode smart`
+2. 运行时指定：`--subtitle_mode smart`
 3. 如果自动检测的字幕区域不准确，可以手动指定：`--subtitle_region y_start,y_end,x_start,x_end`
+4. 如果不需要字幕去除，使用 `--no_subtitle` 关闭
 
 ### Q: 支持哪些视频格式？
 
@@ -505,3 +531,70 @@ pip install edge-tts
 ### Q: 如何只替换部分台词？
 
 在编辑 `transcript_for_edit.md` 时，保持不需要修改的行原样不动即可。工具会对每一行都重新生成语音，但如果文字内容相同，效果与原视频基本一致。
+
+---
+
+## 开发者指南
+
+### 项目结构
+
+```
+voice_replace_project/
+├── .venv/                  # Python 虚拟环境（推荐使用）
+├── voice_replace/          # 核心源码包
+│   ├── cli.py              # 命令行入口（main 函数）
+│   ├── transcriber.py      # Whisper 语音识别
+│   ├── voice_extractor.py  # Demucs 音色提取 + 智能筛选
+│   ├── dialogue_analysis.py # 对话结构分析（segments_as_slots）
+│   ├── text_adapter.py     # 大模型智能创作/分句
+│   ├── timeline.py         # 时间轴对齐引擎
+│   ├── synthesizer.py      # Qwen3-TTS / edge-tts 语音合成
+│   ├── audio_utils.py      # 静音生成、拼接、变速
+│   ├── video_utils.py      # FFmpeg 封装
+│   ├── vad.py              # VAD 语音活动检测
+│   ├── subtitle_remover.py # 字幕去除（默认开启，PaddleOCR 聚类检测 + FFmpeg 模糊）
+│   └── paddle_ocr_bridge.py # PaddleOCR 桥接（Y 坐标聚类算法）
+├── third_party/            # 第三方依赖（VSE 等）
+├── scripts/                # 辅助脚本
+├── requirements.txt        # Python 依赖
+└── setup.py                # 包安装配置
+```
+
+### 三种台词模式与核心函数映射
+
+| 模式 | 参数 | 核心函数 | 所在文件 |
+|------|------|----------|----------|
+| 🔥 **主题创作** | `--topic` | `generate_text_from_topic()` | `voice_replace/text_adapter.py` |
+| 自由文本 | `--new_text` | `adapt_text_with_llm()` | `voice_replace/text_adapter.py` |
+| 手动编辑 | 编辑 `transcript_for_edit.md` | `create_editable_transcript()` | `voice_replace/timeline.py` |
+
+### 开发环境设置
+
+```bash
+# 克隆项目后，激活虚拟环境
+cd voice_replace_project
+source .venv/bin/activate
+
+# 开发模式安装
+pip install -e .
+
+# 运行完整测试（以"菜市场买菜"主题为例）
+python -m voice_replace \
+    --input third_party/video-subtitle-extractor/test/test_cn.mp4 \
+    --output_dir test_output \
+    --topic "菜市场买菜"
+```
+
+### 内置大模型支持
+
+项目已内置 HAI 平台 API Key，开箱即用，无需额外配置。默认使用 `DeepSeek-V3.1`。
+
+| HAI 平台可用模型 | 说明 |
+|------------------|------|
+| `DeepSeek-V3.1` | 默认模型，性价比最高 |
+| `DeepSeek-R1` | 推理增强模型 |
+| `Kimi-K2.5` | Moonshot 模型 |
+| `Qwen3-235B-A22B` | 通义千问大模型 |
+| `Qwen3-32B-FP8` | 通义千问轻量模型 |
+
+也支持任何兼容 OpenAI Chat Completions API 的外部模型，通过 `--llm_api_key`、`--llm_base_url`、`--llm_model` 参数指定。

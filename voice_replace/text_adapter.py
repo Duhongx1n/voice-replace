@@ -89,25 +89,30 @@ def _build_generation_system_prompt() -> str:
     return (
         "你是一个专业的视频台词创作助手。你的任务是根据用户给出的主题方向，"
         "参考原视频的对话结构和节奏，创作全新的台词内容。\n\n"
-        "核心规则：\n"
+        "⭐⭐⭐ 最高优先级规则 — 字数匹配：\n"
+        "每句新台词的字数必须严格落在给定的「目标字数范围」内！\n"
+        "这是硬性约束，不可违反。字数不达标的台词会导致视频中出现\n"
+        "人物嘴在动但没有声音的尴尬空白。\n\n"
+        "字数匹配技巧：\n"
+        "- 10字的句子示例：「今天菜市场的蔬菜真新鲜」（10字）\n"
+        "- 7字的句子示例：「我觉得还不错呢」（7字）\n"
+        "- 3字的句子示例：「是的呢」（3字）\n"
+        "- 12字的句子示例：「这个西红柿看起来又大又红真好」（12字）\n"
+        "- 字数不够时：加修饰词、补充细节、添加语气词（呢、啊、吧、嘛）\n"
+        "- 字数太多时：精简压缩、去掉修饰词\n\n"
+        "其他规则：\n"
         "1. 输出的句子数量必须与原视频的片段数量完全一致\n"
-        "2. ⭐⭐【最重要】每句新台词的字数必须严格匹配原始片段的字数！\n"
-        "   - 每句都有一个「目标字数范围」，你的输出必须落在这个范围内\n"
-        "   - 字数不够时必须扩写（加修饰词、补充细节、添加语气词等）\n"
-        "   - 字数太多时必须精简压缩\n"
-        "   - 这是因为每句台词会被合成语音并填入固定时长的时间槽，"
-        "字数太少会导致语音结束后出现空白（但视频中人物嘴还在动）\n"
-        "3. 每句必须是语义完整的、可以独立朗读的句子或短语\n"
-        "4. 不要在句子中间断开一个词语或成语\n"
-        "5. 新台词的整体语义和逻辑必须连贯，围绕用户给出的主题展开\n"
-        "6. ⭐ 必须保持原视频的对话结构：\n"
+        "2. 每句必须是语义完整的、可以独立朗读的句子或短语\n"
+        "3. 不要在句子中间断开一个词语或成语\n"
+        "4. 新台词的整体语义和逻辑必须连贯，围绕用户给出的主题展开\n"
+        "5. 必须保持原视频的对话结构：\n"
         "   - 原视频中的短回应句（1-3字）对应的新台词也应该是短回应\n"
         "   - 原视频中的提问句对应的新台词也应该是提问\n"
         "   - 原视频中的长叙述句对应的新台词也应该是长叙述\n"
         "   - 如果原视频是多人问答式对话，新台词也应保持问答式结构\n"
-        "7. 新台词应该自然流畅，像真人说话一样，不要太书面化\n"
-        "8. 输出格式：严格按 JSON 数组格式输出，每个元素是一句台词字符串\n"
-        "9. 不要输出任何解释、注释或额外文字，只输出 JSON 数组"
+        "6. 新台词应该自然流畅，像真人说话一样，不要太书面化\n"
+        "7. 输出格式：严格按 JSON 数组格式输出，每个元素是一句台词字符串\n"
+        "8. 不要输出任何解释、注释或额外文字，只输出 JSON 数组"
     )
 
 
@@ -240,6 +245,22 @@ def _build_topic_generation_prompt(
         )
     char_range_info = "\n".join(char_range_lines)
 
+    # 构建填空式模板，让大模型看到每句需要多少字
+    fill_template_lines = []
+    for i, a in enumerate(annotated):
+        char_count = a["char_count"]
+        min_chars = max(1, int(char_count * 0.8))
+        max_chars = max(min_chars + 1, int(char_count * 1.2))
+        role = a["role_label"]
+        stype = a["sentence_type"]
+        placeholder = "_" * char_count
+        fill_template_lines.append(
+            f"  第{i + 1}句(角色{role},{stype},"
+            f"必须{min_chars}-{max_chars}字): "
+            f"\"{placeholder}\""
+        )
+    fill_template = "\n".join(fill_template_lines)
+
     prompt = (
         f"## 创作主题/方向\n\n"
         f"{topic}\n\n"
@@ -249,11 +270,14 @@ def _build_topic_generation_prompt(
         f"{seg_info}\n\n"
         f"## 每句目标字数范围（必须严格遵守！）\n\n"
         f"{char_range_info}\n\n"
+        f"## 填空模板（请用你创作的台词替换下划线，字数必须匹配）\n\n"
+        f"{fill_template}\n\n"
         f"## 任务\n\n"
         f"请围绕上面的「创作主题/方向」，参考原视频的对话结构，"
         f"创作恰好 {num_segments} 句全新的台词。\n\n"
-        f"⭐⭐ 最重要的要求 — 字数匹配：\n"
+        f"⭐⭐⭐ 最重要的硬性要求 — 字数匹配：\n"
         f"每句新台词的字数必须落在上面给出的「目标字数范围」内！\n"
+        f"请在写完每句后自己数一下字数，确保在范围内。\n"
         f"字数太少会导致语音播完后出现空白（但视频中人物嘴还在动），非常不自然。\n"
         f"字数不够时请扩写（加修饰词、补充细节、添加语气词等）。\n\n"
         f"其他要求：\n"
@@ -267,6 +291,204 @@ def _build_topic_generation_prompt(
     )
 
     return prompt
+
+
+def _fix_bad_lines_individually(
+    result: List[str],
+    segments: List[Dict],
+    topic: str,
+    client: "openai.OpenAI",
+    model: str,
+    max_fix_rounds: int = 3,
+) -> List[str]:
+    """
+    对字数不达标的句子逐句调用大模型修正。
+
+    不再重新生成全部台词，而是只修正不达标的句子，
+    保持已达标句子不变，大幅提高修正成功率。
+
+    :param result: 当前的台词列表
+    :param segments: 原视频的 segment 列表
+    :param topic: 创作主题
+    :param client: OpenAI 客户端实例
+    :param model: 模型名称
+    :param max_fix_rounds: 最大修正轮次
+    :return: 修正后的台词列表
+    """
+    fixed = list(result)
+
+    for fix_round in range(max_fix_rounds):
+        # 找出所有不达标的句子
+        bad_indices = []
+        for idx, (seg, line) in enumerate(zip(segments, fixed)):
+            orig_text = seg.get("original_text", seg.get("text", "")).strip()
+            orig_len = len(orig_text)
+            new_len = len(line)
+            if orig_len == 0:
+                continue
+            min_ok = max(1, int(orig_len * 0.7))
+            max_ok = max(min_ok + 1, int(orig_len * 1.3))
+            if new_len < min_ok or new_len > max_ok:
+                bad_indices.append(idx)
+
+        if not bad_indices:
+            print(f"  [逐句修正] ✅ 第 {fix_round + 1} 轮: 所有句子字数达标")
+            return fixed
+
+        print(
+            f"  [逐句修正] 第 {fix_round + 1} 轮: "
+            f"修正 {len(bad_indices)} 句不达标的台词..."
+        )
+
+        # 构建上下文信息，让大模型看到前后句子
+        fix_items = []
+        for idx in bad_indices:
+            seg = segments[idx]
+            orig_text = seg.get("original_text", seg.get("text", "")).strip()
+            orig_len = len(orig_text)
+            min_ok = max(1, int(orig_len * 0.7))
+            max_ok = max(min_ok + 1, int(orig_len * 1.3))
+            current_line = fixed[idx]
+
+            # 获取前后句子作为上下文
+            prev_line = fixed[idx - 1] if idx > 0 else "(无)"
+            next_line = fixed[idx + 1] if idx < len(fixed) - 1 else "(无)"
+
+            fix_items.append({
+                "index": idx,
+                "prev": prev_line,
+                "current": current_line,
+                "current_len": len(current_line),
+                "next": next_line,
+                "target_len": orig_len,
+                "min_len": min_ok,
+                "max_len": max_ok,
+                "orig_text": orig_text,
+            })
+
+        # 构建修正 prompt
+        fix_prompt_lines = []
+        for item in fix_items:
+            fix_prompt_lines.append(
+                f"第{item['index'] + 1}句:\n"
+                f"  上一句: \"{item['prev']}\"\n"
+                f"  当前(需修正): \"{item['current']}\"（{item['current_len']}字）\n"
+                f"  下一句: \"{item['next']}\"\n"
+                f"  要求: 必须 {item['min_len']}-{item['max_len']} 字"
+                f"（目标 {item['target_len']} 字）"
+            )
+        fix_detail = "\n\n".join(fix_prompt_lines)
+
+        fix_prompt = (
+            f"主题: {topic}\n\n"
+            f"以下台词的字数不达标，请逐句修正。\n"
+            f"修正时保持与前后句子的语义连贯，围绕主题展开。\n"
+            f"字数不够就扩写（加修饰词、细节、语气词），"
+            f"字数太多就精简。\n\n"
+            f"{fix_detail}\n\n"
+            f"请输出 JSON 对象，key 是句子编号（如 \"1\"），"
+            f"value 是修正后的台词。\n"
+            f"例如: {{\"1\": \"修正后的第一句\", "
+            f"\"5\": \"修正后的第五句\"}}\n\n"
+            f"只输出 JSON，不要解释。"
+        )
+
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是台词修正助手。用户会给你一些字数不达标的台词，"
+                            "请逐句修正使其字数落在目标范围内。"
+                            "保持语义连贯和自然流畅。只输出 JSON。"
+                        ),
+                    },
+                    {"role": "user", "content": fix_prompt},
+                ],
+                temperature=0.3,
+                max_tokens=4096,
+            )
+
+            reply = response.choices[0].message.content.strip()
+
+            # 解析修正结果（JSON 对象）
+            fix_result = None
+            # 尝试直接解析
+            try:
+                fix_result = json.loads(reply)
+            except json.JSONDecodeError:
+                pass
+
+            # 尝试提取 JSON 代码块
+            if fix_result is None:
+                json_block_pattern = r'```(?:json)?\s*\n?(.*?)\n?```'
+                matches = re.findall(json_block_pattern, reply, re.DOTALL)
+                for match in matches:
+                    try:
+                        fix_result = json.loads(match.strip())
+                        break
+                    except json.JSONDecodeError:
+                        continue
+
+            # 尝试提取花括号内容
+            if fix_result is None:
+                brace_pattern = r'\{.*\}'
+                matches = re.findall(brace_pattern, reply, re.DOTALL)
+                for match in matches:
+                    try:
+                        fix_result = json.loads(match)
+                        break
+                    except json.JSONDecodeError:
+                        continue
+
+            if not isinstance(fix_result, dict):
+                print(
+                    f"  [逐句修正] 第 {fix_round + 1} 轮: "
+                    f"JSON 解析失败，跳过本轮"
+                )
+                continue
+
+            # 应用修正结果
+            applied_count = 0
+            for key, new_line in fix_result.items():
+                try:
+                    idx = int(key) - 1  # 句子编号从 1 开始
+                except (ValueError, TypeError):
+                    continue
+                if 0 <= idx < len(fixed) and isinstance(new_line, str):
+                    fixed[idx] = new_line
+                    applied_count += 1
+
+            print(
+                f"  [逐句修正] 第 {fix_round + 1} 轮: "
+                f"成功修正 {applied_count}/{len(bad_indices)} 句"
+            )
+
+        except Exception as e:
+            print(
+                f"  [逐句修正] 第 {fix_round + 1} 轮调用失败: {e}",
+                file=sys.stderr,
+            )
+
+    # 最终统计
+    still_bad = 0
+    for idx, (seg, line) in enumerate(zip(segments, fixed)):
+        orig_text = seg.get("original_text", seg.get("text", "")).strip()
+        orig_len = len(orig_text)
+        if orig_len == 0:
+            continue
+        min_ok = max(1, int(orig_len * 0.7))
+        max_ok = max(min_ok + 1, int(orig_len * 1.3))
+        if len(line) < min_ok or len(line) > max_ok:
+            still_bad += 1
+    if still_bad > 0:
+        print(
+            f"  [逐句修正] ⚠️ 经过 {max_fix_rounds} 轮修正，"
+            f"仍有 {still_bad} 句字数偏差，使用当前最佳结果"
+        )
+    return fixed
 
 
 def _parse_llm_response(response_text: str, expected_count: int) -> Optional[List[str]]:
@@ -516,7 +738,14 @@ def adapt_text_with_llm(
             if bad_lines:
                 print(
                     f"  [大模型分句] ⚠️ 仍有 {len(bad_lines)} 句字数偏差，"
-                    f"但已达最大重试次数，使用当前结果"
+                    f"进入逐句修正模式..."
+                )
+                result = _fix_bad_lines_individually(
+                    result=result,
+                    segments=segments,
+                    topic=new_text[:50],
+                    client=client,
+                    model=effective_model,
                 )
 
             print(f"  [大模型分句] ✅ 成功拆分为 {len(result)} 句")
@@ -609,7 +838,7 @@ def generate_text_from_topic(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.7,
+                temperature=0.4,
                 max_tokens=4096,
             )
 
@@ -673,7 +902,14 @@ def generate_text_from_topic(
             if bad_lines:
                 print(
                     f"  [大模型创作] ⚠️ 仍有 {len(bad_lines)} 句字数偏差，"
-                    f"但已达最大重试次数，使用当前结果"
+                    f"进入逐句修正模式..."
+                )
+                result = _fix_bad_lines_individually(
+                    result=result,
+                    segments=segments,
+                    topic=topic,
+                    client=client,
+                    model=effective_model,
                 )
 
             print(f"  [大模型创作] ✅ 成功创作 {len(result)} 句新台词")

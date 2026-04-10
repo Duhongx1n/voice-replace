@@ -9,14 +9,19 @@
 
 OCR 引擎优先级：
     1. RapidOCR（基于 ONNX Runtime，无需 PaddlePaddle，支持 Python 3.13+）
-    2. PaddleOCR（需要 PaddlePaddle 引擎，仅支持 Python ≤ 3.12）
+    2. PaddleOCR（本地安装，需要 PaddlePaddle 引擎，仅支持 Python ≤ 3.12）
+    3. PaddleOCR 桥接环境（独立 Python 3.12 虚拟环境，通过子进程调用）
 
-安装 OCR 依赖（二选一）：
-    # 推荐：RapidOCR（轻量，兼容性好）
+安装 OCR 依赖（三选一）：
+    # 方式一：RapidOCR（轻量，兼容性好）
     pip install rapidocr-onnxruntime opencv-python-headless
 
-    # 或者：PaddleOCR（需要 Python ≤ 3.12）
+    # 方式二：PaddleOCR（需要 Python ≤ 3.12）
     pip install paddlepaddle paddleocr opencv-python-headless
+
+    # 方式三：PaddleOCR 桥接环境（推荐，解决 Python 版本问题）
+    python3.12 -m venv .venv_paddle
+    .venv_paddle/bin/pip install paddlepaddle paddleocr opencv-python-headless
 
 使用方法：
     from voice_replace.subtitle_remover import remove_subtitles
@@ -30,17 +35,25 @@ OCR 引擎优先级：
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
+# 项目根目录
+_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # VSE 项目在 third_party 中的路径
-_VSE_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "third_party",
-    "video-subtitle-extractor",
+_VSE_DIR = os.path.join(_PROJECT_DIR, "third_party", "video-subtitle-extractor")
+
+# PaddleOCR 独立虚拟环境路径（Python 3.12）
+_PADDLE_VENV_DIR = os.path.join(_PROJECT_DIR, ".venv_paddle")
+_PADDLE_PYTHON = os.path.join(_PADDLE_VENV_DIR, "bin", "python")
+_PADDLE_BRIDGE_SCRIPT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "paddle_ocr_bridge.py",
 )
 
 
@@ -99,18 +112,49 @@ def _check_rapidocr_deps() -> bool:
         return False
 
 
+def _check_paddle_bridge_deps() -> bool:
+    """
+    检查 PaddleOCR 桥接环境是否可用。
+
+    桥接环境是一个独立的 Python 3.12 虚拟环境，
+    安装了 PaddleOCR，通过子进程调用来避免
+    Python 版本不兼容的问题。
+
+    :return: 桥接环境是否可用
+    """
+    if not os.path.isfile(_PADDLE_PYTHON):
+        return False
+    if not os.path.isfile(_PADDLE_BRIDGE_SCRIPT):
+        return False
+    # 快速验证：尝试导入 paddleocr
+    try:
+        result = subprocess.run(
+            [_PADDLE_PYTHON, "-c", "import paddleocr; print('ok')"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return result.returncode == 0 and "ok" in result.stdout
+    except (subprocess.TimeoutExpired, Exception):
+        return False
+
+
 def _check_any_ocr_deps() -> bool:
     """
-    检查是否有任何可用的 OCR 引擎（RapidOCR 或 PaddleOCR）。
+    检查是否有任何可用的 OCR 引擎。
+
+    优先级：PaddleOCR（桥接环境）→ PaddleOCR（本地）→ RapidOCR
+    （PaddleOCR 精度更高，优先使用）
 
     :return: 是否有可用的 OCR 引擎
     """
-    return _check_rapidocr_deps() or _check_paddle_deps()
+    return _check_paddle_bridge_deps() or _check_paddle_deps() or _check_rapidocr_deps()
 
 
 def _create_ocr_engine():
     """
-    创建 OCR 引擎实例，优先使用 RapidOCR，fallback 到 PaddleOCR。
+    创建 OCR 引擎实例。
+
+    优先级：PaddleOCR（桥接环境）→ PaddleOCR（本地）→ RapidOCR
+    （PaddleOCR 精度更高，优先使用）
 
     返回一个统一接口的 OCR 包装对象，提供 detect(image) 方法，
     返回检测到的文字框列表 [(box, text, confidence), ...]。
@@ -118,15 +162,19 @@ def _create_ocr_engine():
     :return: OCR 引擎包装对象
     :raises RuntimeError: 没有可用的 OCR 引擎
     """
-    if _check_rapidocr_deps():
-        return _RapidOCRWrapper()
+    if _check_paddle_bridge_deps():
+        return _PaddleBridgeOCRWrapper()
     elif _check_paddle_deps():
         return _PaddleOCRWrapper()
+    elif _check_rapidocr_deps():
+        return _RapidOCRWrapper()
     else:
         raise RuntimeError(
             "没有可用的 OCR 引擎。请安装以下任一依赖：\n"
             "  pip install rapidocr-onnxruntime opencv-python-headless\n"
-            "  pip install paddlepaddle paddleocr opencv-python-headless"
+            "  pip install paddlepaddle paddleocr opencv-python-headless\n"
+            "  或运行: python3.12 -m venv .venv_paddle && "
+            ".venv_paddle/bin/pip install paddlepaddle paddleocr opencv-python-headless"
         )
 
 
@@ -179,6 +227,105 @@ class _PaddleOCRWrapper:
             return []
         # PaddleOCR 返回: [[box, (text, confidence)], ...]
         return [(line[0], line[1][0], line[1][1]) for line in results[0]]
+
+
+class _PaddleBridgeOCRWrapper:
+    """
+    PaddleOCR 桥接引擎包装器。
+
+    通过子进程调用独立的 Python 3.12 虚拟环境中的 PaddleOCR，
+    解决 Python 3.13+ 无法安装 PaddlePaddle 的问题。
+    图像通过临时文件传递，结果通过 JSON 返回。
+    """
+
+    def __init__(self):
+        self.name = "PaddleOCR（桥接环境 Python 3.12）"
+        self._python = _PADDLE_PYTHON
+        self._script = _PADDLE_BRIDGE_SCRIPT
+
+    def detect(self, image):
+        """
+        检测图像中的文字区域（通过桥接脚本）。
+
+        :param image: OpenCV 格式的图像（numpy array）
+        :return: 检测到的文字框列表 [(box, text, confidence), ...]
+                 box 格式: [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
+        """
+        import cv2
+        import tempfile
+
+        # 将图像保存为临时文件
+        with tempfile.NamedTemporaryFile(
+            suffix=".png", delete=False,
+        ) as tmp:
+            tmp_path = tmp.name
+            cv2.imwrite(tmp_path, image)
+
+        try:
+            result = subprocess.run(
+                [self._python, self._script, "detect", tmp_path],
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode != 0:
+                return []
+
+            data = json.loads(result.stdout)
+            detections = data.get("detections", [])
+            return [
+                (d["box"], d["text"], d["confidence"])
+                for d in detections
+            ]
+        except (json.JSONDecodeError, subprocess.TimeoutExpired, Exception):
+            return []
+        finally:
+            if os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+
+    def detect_video_region(
+        self,
+        video_path: str,
+        sample_count: int = 10,
+        bottom_ratio: float = 0.3,
+    ) -> Optional[tuple]:
+        """
+        通过桥接脚本采样视频帧，自动检测字幕区域。
+
+        此方法直接调用桥接脚本的 detect_video_region 命令，
+        避免逐帧传递图像的开销。
+
+        :param video_path: 视频文件路径
+        :param sample_count: 采样帧数
+        :param bottom_ratio: 只检测画面底部的比例
+        :return: (y_start, y_end, x_start, x_end) 或 None
+        """
+        try:
+            result = subprocess.run(
+                [
+                    self._python, self._script,
+                    "detect_video_region", video_path,
+                    "--samples", str(sample_count),
+                    "--bottom_ratio", str(bottom_ratio),
+                ],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode != 0:
+                return None
+
+            data = json.loads(result.stdout)
+            region = data.get("region")
+            if region is None:
+                return None
+
+            detections = data.get("detections", [])
+            frame_size = data.get("frame_size", [0, 0])
+            print(f"  检测到字幕区域: y=[{region[0]}, {region[1]}], "
+                  f"x=[{region[2]}, {region[3]}]")
+            print(f"  画面尺寸: {frame_size[0]}x{frame_size[1]}")
+            print(f"  检测到 {len(detections)} 个文字框")
+            return tuple(region)
+        except (json.JSONDecodeError, subprocess.TimeoutExpired, Exception) as exc:
+            print(f"  [警告] 桥接 OCR 检测失败: {exc}", file=sys.stderr)
+            return None
 
 
 def _remove_subtitles_vse(
@@ -314,6 +461,82 @@ def _find_vse_output_fallback(video_path: str) -> Optional[str]:
     return None
 
 
+def _cluster_subtitle_boxes_local(
+    text_boxes: list,
+    frame_height: int,
+    frame_width: int,
+    y_tolerance: float = 0.03,
+) -> list:
+    """
+    对检测到的文字框进行 Y 坐标聚类，筛选出真正的字幕区域。
+
+    字幕的特征：
+    1. 多帧在相近的 Y 坐标位置重复出现
+    2. 通常水平居中
+    3. 宽度较大（一般占画面宽度 20% 以上）
+
+    非字幕文字（水印、logo、角标）的特征：
+    1. 位置偏角落
+    2. 宽度较小
+    3. 可能只在少数帧出现
+
+    :param text_boxes: 所有检测框 [(y_min, y_max, x_min, x_max), ...]
+    :param frame_height: 画面高度
+    :param frame_width: 画面宽度
+    :param y_tolerance: Y 坐标聚类容差（占画面高度的比例）
+    :return: 筛选后的字幕框列表
+    """
+    if not text_boxes:
+        return []
+
+    # 计算每个框的 Y 中心坐标
+    y_centers = [(box[0] + box[1]) / 2.0 for box in text_boxes]
+    tolerance_px = frame_height * y_tolerance
+
+    # 简单聚类：按 Y 中心坐标排序后合并相近的框
+    indexed = sorted(enumerate(y_centers), key=lambda x: x[1])
+    clusters = []
+    current_cluster = [indexed[0][0]]
+    current_y = indexed[0][1]
+
+    for idx, y_center in indexed[1:]:
+        if abs(y_center - current_y) <= tolerance_px:
+            current_cluster.append(idx)
+        else:
+            clusters.append(current_cluster)
+            current_cluster = [idx]
+            current_y = y_center
+    clusters.append(current_cluster)
+
+    # 筛选字幕 cluster：
+    # 1. 平均宽度 >= 画面宽度的 20%
+    # 2. 水平位置偏中间（中心 x 在画面中间 80% 范围内）
+    subtitle_indices = []
+    min_width = frame_width * 0.20
+    x_margin = frame_width * 0.10
+
+    for cluster in clusters:
+        widths = [text_boxes[idx][3] - text_boxes[idx][2] for idx in cluster]
+        avg_width = sum(widths) / len(widths)
+        x_centers = [
+            (text_boxes[idx][2] + text_boxes[idx][3]) / 2.0
+            for idx in cluster
+        ]
+        avg_x_center = sum(x_centers) / len(x_centers)
+
+        is_wide_enough = avg_width >= min_width
+        is_centered = x_margin <= avg_x_center <= (frame_width - x_margin)
+
+        if is_wide_enough and is_centered:
+            subtitle_indices.extend(cluster)
+
+    # 如果筛选后没有结果，返回所有框（兜底）
+    if not subtitle_indices:
+        return text_boxes
+
+    return [text_boxes[i] for i in subtitle_indices]
+
+
 def _detect_subtitle_region_auto(
     video_path: str,
     sample_count: int = 10,
@@ -370,6 +593,12 @@ def _detect_subtitle_region_auto(
         detections = ocr.detect(bottom_region)
 
         for box, text, confidence in detections:
+            # 过滤低置信度检测（水印、噪声等）
+            if confidence < 0.5:
+                continue
+            # 过滤空文本
+            if not text or not text.strip():
+                continue
             # 将坐标转换回完整帧的坐标系
             y_min = int(min(p[1] for p in box)) + y_threshold
             y_max = int(max(p[1] for p in box)) + y_threshold
@@ -382,15 +611,27 @@ def _detect_subtitle_region_auto(
         print("  [信息] 未检测到字幕区域", file=sys.stderr)
         return None
 
-    # 统计字幕区域的边界（取所有检测框的并集，适当扩展）
-    all_y_min = min(box[0] for box in text_boxes)
-    all_y_max = max(box[1] for box in text_boxes)
-    all_x_min = min(box[2] for box in text_boxes)
-    all_x_max = max(box[3] for box in text_boxes)
+    # 使用聚类算法筛选真正的字幕框，过滤水印/logo 等干扰
+    filtered_boxes = _cluster_subtitle_boxes_local(
+        text_boxes, frame_height, frame_width,
+    )
 
-    # 上下各扩展 10 像素，左右各扩展 20 像素
-    padding_y = 10
-    padding_x = 20
+    if not filtered_boxes:
+        print("  [信息] 聚类筛选后无有效字幕区域", file=sys.stderr)
+        return None
+
+    print(f"  检测到 {len(text_boxes)} 个文字框，"
+          f"筛选后保留 {len(filtered_boxes)} 个字幕框")
+
+    # 统计筛选后的字幕区域边界
+    all_y_min = min(box[0] for box in filtered_boxes)
+    all_y_max = max(box[1] for box in filtered_boxes)
+    all_x_min = min(box[2] for box in filtered_boxes)
+    all_x_max = max(box[3] for box in filtered_boxes)
+
+    # 上下各扩展 5 像素，左右各扩展 10 像素（缩小 padding，更精确）
+    padding_y = 5
+    padding_x = 10
     y_start = max(0, all_y_min - padding_y)
     y_end = min(frame_height, all_y_max + padding_y)
     x_start = max(0, all_x_min - padding_x)
@@ -532,7 +773,15 @@ def _remove_subtitles_fast(
     """
     # 如果没有预设区域，尝试自动检测
     if subtitle_region is None:
-        if _check_any_ocr_deps():
+        if _check_paddle_bridge_deps():
+            # 优先使用桥接环境的 PaddleOCR（精度最高）
+            print("  使用 PaddleOCR 桥接环境（Python 3.12）检测字幕区域...")
+            bridge = _PaddleBridgeOCRWrapper()
+            subtitle_region = bridge.detect_video_region(
+                video_path, sample_count=sample_count,
+            )
+        elif _check_paddle_deps() or _check_rapidocr_deps():
+            # 本地 OCR 引擎可用，直接检测
             subtitle_region = _detect_subtitle_region_auto(
                 video_path, sample_count=sample_count,
             )
@@ -842,10 +1091,16 @@ if __name__ == "__main__":
     if _check_rapidocr_deps():
         print("✅ RapidOCR 已安装并可用（推荐）")
     elif _check_paddle_deps():
-        print("✅ PaddleOCR 已安装并可用")
+        print("✅ PaddleOCR 已安装并可用（本地）")
+    elif _check_paddle_bridge_deps():
+        print("✅ PaddleOCR 桥接环境可用（Python 3.12 虚拟环境）")
     else:
         print("❌ 无可用的 OCR 引擎")
-        print("   安装方法: pip install rapidocr-onnxruntime")
+        print("   安装方法（三选一）:")
+        print("   1. pip install rapidocr-onnxruntime")
+        print("   2. pip install paddlepaddle paddleocr  # 需要 Python ≤ 3.12")
+        print("   3. python3.12 -m venv .venv_paddle && "
+              ".venv_paddle/bin/pip install paddlepaddle paddleocr")
 
     # 检查 VSE 可用性
     if _check_vse_available():
