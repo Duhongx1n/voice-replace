@@ -47,7 +47,7 @@ def check_openai() -> bool:
 
 def _build_system_prompt() -> str:
     """
-    构建系统提示词。
+    构建系统提示词（分句适配模式）。
 
     :return: 系统提示词字符串
     """
@@ -72,6 +72,35 @@ def _build_system_prompt() -> str:
     )
 
 
+def _build_generation_system_prompt() -> str:
+    """
+    构建系统提示词（主题创作模式）。
+
+    当用户只给出一个方向/主题时，大模型需要根据原视频的对话结构
+    自动创作全新的台词内容。
+
+    :return: 系统提示词字符串
+    """
+    return (
+        "你是一个专业的视频台词创作助手。你的任务是根据用户给出的主题方向，"
+        "参考原视频的对话结构和节奏，创作全新的台词内容。\n\n"
+        "核心规则：\n"
+        "1. 输出的句子数量必须与原视频的片段数量完全一致\n"
+        "2. 每句新台词的字数应尽量与对应原始片段的字数比例接近（因为字数影响语音时长）\n"
+        "3. 每句必须是语义完整的、可以独立朗读的句子或短语\n"
+        "4. 不要在句子中间断开一个词语或成语\n"
+        "5. 新台词的整体语义和逻辑必须连贯，围绕用户给出的主题展开\n"
+        "6. ⭐ 必须保持原视频的对话结构：\n"
+        "   - 原视频中的短回应句（1-3字）对应的新台词也应该是短回应\n"
+        "   - 原视频中的提问句对应的新台词也应该是提问\n"
+        "   - 原视频中的长叙述句对应的新台词也应该是长叙述\n"
+        "   - 如果原视频是多人问答式对话，新台词也应保持问答式结构\n"
+        "7. 新台词应该自然流畅，像真人说话一样，不要太书面化\n"
+        "8. 输出格式：严格按 JSON 数组格式输出，每个元素是一句台词字符串\n"
+        "9. 不要输出任何解释、注释或额外文字，只输出 JSON 数组"
+    )
+
+
 def _build_user_prompt(
     original_segments: List[Dict],
     new_text: str,
@@ -84,9 +113,9 @@ def _build_user_prompt(
     :return: 用户提示词字符串
     """
     # 分析对话结构
-    from voice_replace.timeline import _analyze_dialogue_structure, segments_as_slots
+    from voice_replace.dialogue_analysis import analyze_dialogue_structure, segments_as_slots
     slots = segments_as_slots(original_segments)
-    annotated = _analyze_dialogue_structure(slots)
+    annotated = analyze_dialogue_structure(slots)
 
     # 构建原始分句信息（带对话结构标注）
     seg_info_lines = []
@@ -132,6 +161,71 @@ def _build_user_prompt(
     )
 
     return prompt
+
+
+def _build_topic_generation_prompt(
+    original_segments: List[Dict],
+    topic: str,
+) -> str:
+    """
+    构建主题创作模式的用户提示词。
+
+    :param original_segments: 原视频的 Whisper segments 列表
+    :param topic: 用户给出的主题/方向描述
+    :return: 用户提示词字符串
+    """
+    # 分析对话结构
+    from voice_replace.dialogue_analysis import analyze_dialogue_structure, segments_as_slots
+    slots = segments_as_slots(original_segments)
+    annotated = analyze_dialogue_structure(slots)
+
+    # 构建原始分句信息（带对话结构标注）
+    seg_info_lines = []
+    total_chars = 0
+    for i, a in enumerate(annotated):
+        text = a.get("original_text", "").strip()
+        duration = a["duration"]
+        char_count = a["char_count"]
+        role = a["role_label"]
+        stype = a["sentence_type"]
+        total_chars += char_count
+        seg_info_lines.append(
+            f"  第{i + 1}句: 时长{duration:.1f}秒, {char_count}字, "
+            f"角色{role}, 类型[{stype}], "
+            f"原文: \"{text}\""
+        )
+
+    seg_info = "\n".join(seg_info_lines)
+    num_segments = len(original_segments)
+
+    # 统计对话模式
+    roles_used = sorted(set(a["role_label"] for a in annotated))
+    role_count = len(roles_used)
+    dialogue_mode = "多人对话" if role_count > 1 else "单人独白"
+
+    prompt = (
+        f"## 创作主题/方向\n\n"
+        f"{topic}\n\n"
+        f"## 原视频对话结构分析\n\n"
+        f"对话模式: {dialogue_mode}（推断出 {role_count} 个角色）\n\n"
+        f"## 原视频分句信息（共 {num_segments} 个片段，总计 {total_chars} 字）\n\n"
+        f"{seg_info}\n\n"
+        f"## 任务\n\n"
+        f"请围绕上面的「创作主题/方向」，参考原视频的对话结构，"
+        f"创作恰好 {num_segments} 句全新的台词。\n\n"
+        f"重要要求：\n"
+        f"1. 每句新台词的字数尽量与对应原始片段的字数比例接近\n"
+        f"2. 保持原视频的对话结构：原文是短回应的地方，新台词也应该是短回应\n"
+        f"3. 原文是提问的地方，新台词也应该是提问\n"
+        f"4. 角色切换处保持自然过渡\n"
+        f"5. 台词内容必须围绕给定的主题展开，不要照搬原文\n\n"
+        f"直接输出 JSON 数组，格式如：\n"
+        f'["\u7b2c\u4e00\u53e5\u53f0\u8bcd", "\u7b2c\u4e8c\u53e5\u53f0\u8bcd", ...]\n\n'
+        f"注意：数组长度必须恰好为 {num_segments}。"
+    )
+
+    return prompt
+
 
 def _parse_llm_response(response_text: str, expected_count: int) -> Optional[List[str]]:
     """
@@ -357,6 +451,127 @@ def adapt_text_with_llm(
             )
 
     print("[警告] 大模型分句失败，将使用原始文本", file=sys.stderr)
+    return None
+
+
+def generate_text_from_topic(
+    topic: str,
+    segments: List[Dict],
+    api_key: str = "",
+    base_url: str = "",
+    model: str = "",
+    max_retries: int = 2,
+) -> Optional[List[str]]:
+    """
+    根据主题/方向，调用大模型自动创作与原视频时间轴匹配的新台词。
+
+    用户只需给出一个方向（如"介绍人工智能技术"），大模型会参考
+    原视频每句话的时长、角色、句式结构，自动创作出完全匹配时间轴
+    的全新台词。
+
+    :param topic: 用户给出的主题/方向描述
+    :param segments: 原视频的 segment 列表（含 start, end, original_text/text）
+    :param api_key: API Key
+    :param base_url: API Base URL
+    :param model: 模型名称
+    :param max_retries: 最大重试次数
+    :return: 生成的台词列表，失败返回 None
+    """
+    if not check_openai():
+        print(
+            "[错误] openai 库未安装。请运行: pip install openai",
+            file=sys.stderr,
+        )
+        return None
+
+    import openai
+
+    # 确定 API Key、Base URL 和模型（优先级：参数 > 环境变量 > 内置默认值）
+    effective_api_key = (
+        api_key
+        or os.environ.get("OPENAI_API_KEY", "")
+        or DEFAULT_API_KEY
+    )
+    effective_base_url = (
+        base_url
+        or os.environ.get("OPENAI_BASE_URL", "")
+        or DEFAULT_BASE_URL
+    )
+    effective_model = model or DEFAULT_MODEL
+
+    if not effective_api_key:
+        print(
+            "[错误] 未提供 LLM API Key。请通过 --llm_api_key 参数或 "
+            "OPENAI_API_KEY 环境变量设置。",
+            file=sys.stderr,
+        )
+        return None
+
+    # 创建客户端
+    client_kwargs = {"api_key": effective_api_key}
+    if effective_base_url:
+        client_kwargs["base_url"] = effective_base_url
+
+    client = openai.OpenAI(**client_kwargs)
+
+    num_segments = len(segments)
+    system_prompt = _build_generation_system_prompt()
+    user_prompt = _build_topic_generation_prompt(segments, topic)
+
+    print(f"  [大模型创作] 调用 {effective_model}")
+    print(f"    API: {effective_base_url or '(默认)'}")
+    print(f"    主题: {topic}")
+    print(f"    目标: {num_segments} 句")
+
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model=effective_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.7,
+                max_tokens=4096,
+            )
+
+            reply = response.choices[0].message.content
+            result = _parse_llm_response(reply, num_segments)
+
+            if result is None:
+                print(f"  [大模型创作] 第 {attempt + 1} 次: JSON 解析失败，重试...")
+                continue
+
+            if len(result) != num_segments:
+                print(
+                    f"  [大模型创作] 第 {attempt + 1} 次: "
+                    f"返回 {len(result)} 句，期望 {num_segments} 句，重试..."
+                )
+                user_prompt += (
+                    f"\n\n⚠️ 上次你返回了 {len(result)} 句，但必须恰好是 "
+                    f"{num_segments} 句。请重新创作。"
+                )
+                continue
+
+            # 验证每句非空
+            empty_count = sum(1 for s in result if not s.strip())
+            if empty_count > 0:
+                print(
+                    f"  [大模型创作] 第 {attempt + 1} 次: "
+                    f"有 {empty_count} 句为空，重试..."
+                )
+                continue
+
+            print(f"  [大模型创作] ✅ 成功创作 {len(result)} 句新台词")
+            return result
+
+        except Exception as e:
+            print(
+                f"  [大模型创作] 第 {attempt + 1} 次调用失败: {e}",
+                file=sys.stderr,
+            )
+
+    print("[警告] 大模型创作失败", file=sys.stderr)
     return None
 
 

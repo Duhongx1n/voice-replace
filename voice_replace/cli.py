@@ -6,16 +6,20 @@
 完整流程：
 1. 从原始视频中提取语音并转写为文字（Whisper）
 2. 从原始视频中提取音色参考片段（Demucs + 智能筛选）
-3. 大模型智能分句 - 自动将用户的自由格式新台词按原视频节奏拆分
+3. 大模型智能生成/分句 - 根据主题自动创作新台词，或将自由格式台词按原视频节奏拆分
 4. 用克隆的原音色朗读新内容（Qwen3-TTS 时间轴对齐合成）
 5. 用 FFmpeg 将新音频替换回原视频
 
 使用方法：
-    # 推荐：一步到位 - 准备新台词文本，大模型自动分句对齐
+    # 🔥 最推荐：只给一个方向/主题，大模型自动创作新台词
+    python -m voice_replace --input 原始视频.mp4 --output_dir 输出目录 \\
+        --topic "介绍人工智能技术的发展历程"
+
+    # 方式二：准备新台词文本，大模型自动分句对齐
     python -m voice_replace --input 原始视频.mp4 --output_dir 输出目录 \\
         --new_text 新台词.txt
 
-    # 手动模式（精确控制每句台词）：
+    # 方式三：手动模式（精确控制每句台词）
     # 第一步：提取原视频文字 + 音色参考（自动完成）
     python -m voice_replace --input 原始视频.mp4 --output_dir 输出目录
     # 第二步：编辑 输出目录/transcript_for_edit.md
@@ -90,13 +94,17 @@ def parse_args() -> argparse.Namespace:
         epilog="""
 使用示例：
 
-  # 推荐：一步到位 - 准备新台词，大模型自动分句对齐
+  # 🔥 最推荐：只给一个方向/主题，大模型自动创作新台词
+  python -m voice_replace --input video.mp4 --output_dir output \\
+      --topic "介绍人工智能技术的发展历程"
+
+  # 方式二：准备新台词文本，大模型自动分句对齐
   python -m voice_replace --input video.mp4 --output_dir output \\
       --new_text my_script.txt
 
   # 指定其他大模型
   python -m voice_replace --input video.mp4 --output_dir output \\
-      --new_text my_script.txt --llm_model Kimi-K2.5
+      --topic "聊聊量子计算" --llm_model Kimi-K2.5
 
   # 手动模式：先提取，再编辑，最后生成
   python -m voice_replace --input video.mp4 --output_dir output
@@ -113,6 +121,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output_dir", required=True,
         help="输出目录（所有中间文件和最终结果都在这里）",
+    )
+    parser.add_argument(
+        "--topic", default="",
+        help="新台词的主题/方向描述（最推荐的方式）。"
+             "只需给出一个方向，大模型会根据原视频的时间轴和对话结构"
+             "自动创作全新的台词。例如: '介绍人工智能技术的发展历程'。"
+             "与 --new_text 互斥，优先使用 --topic。",
     )
     parser.add_argument(
         "--new_text", default="",
@@ -224,7 +239,10 @@ def main() -> int:
     print(f"  输出目录: {output_dir}")
     if args.remove_subtitle:
         print("  字幕去除: ✅ 已启用")
-    if args.new_text:
+    if args.topic:
+        print(f"  创作主题: {args.topic}")
+        print("  模式: 🔥 主题创作（大模型自动生成新台词，步骤 0-5）")
+    elif args.new_text:
         print(f"  新文本: {args.new_text}")
         print("  模式: 完整替换流程（步骤 0-5）")
     else:
@@ -270,26 +288,32 @@ def main() -> int:
     else:
         ref_voice_path = extract_reference_voice(effective_video, output_dir)
 
-    # 仅在未提供新文本时，生成可编辑的文本文件
-    if not args.new_text:
+    # 仅在未提供新文本且未指定主题时，生成可编辑的文本文件
+    if not args.new_text and not args.topic:
         edit_path = create_editable_transcript(transcript_path, output_dir)
 
-    # 如果没有提供新文本，到此为止
-    if not args.new_text:
+    # 如果没有提供新文本且没有指定主题，到此为止
+    if not args.new_text and not args.topic:
         print("\n" + "=" * 60)
         print("✅ 提取完成！")
         print("=" * 60)
         print(f"\n  原始转写文本: {transcript_path}")
         print(f"  可编辑文本:   {edit_path}")
         print(f"  参考音频:     {ref_voice_path}")
-        print(f"\n📝 下一步（二选一）：")
-        print(f"\n  🚀 推荐：准备一段新台词文本，大模型自动分句对齐")
+        print(f"\n📝 下一步（三选一）：")
+        print(f"\n  � 最推荐：只给一个方向，大模型自动创作新台词")
+        print(f"     python -m voice_replace \\")
+        print(f"       --input {input_video} \\")
+        print(f"       --output_dir {output_dir} \\")
+        print(f"       --topic \"你想要的台词方向\" \\")
+        print(f"       --skip_extract")
+        print(f"\n  🚀 方式二：准备一段新台词文本，大模型自动分句对齐")
         print(f"     python -m voice_replace \\")
         print(f"       --input {input_video} \\")
         print(f"       --output_dir {output_dir} \\")
         print(f"       --new_text 新台词.txt \\")
         print(f"       --skip_extract")
-        print(f"\n  ✏️  手动：逐句编辑 {edit_path}")
+        print(f"\n  ✏️  方式三：逐句编辑 {edit_path}")
         print(f"     python -m voice_replace \\")
         print(f"       --input {input_video} \\")
         print(f"       --output_dir {output_dir} \\")
@@ -297,11 +321,58 @@ def main() -> int:
         print(f"       --skip_extract")
         return 0
 
-    # 验证新文本文件
-    new_text_path = os.path.abspath(args.new_text)
-    if not os.path.isfile(new_text_path):
-        print(f"[错误] 新文本文件不存在: {new_text_path}", file=sys.stderr)
-        return 1
+    # ---- 主题创作模式 vs 新文本模式 ----
+    new_text_path = ""
+    if args.topic:
+        # 主题创作模式：大模型根据主题自动生成新台词
+        from voice_replace.text_adapter import generate_text_from_topic
+        from voice_replace.dialogue_analysis import segments_as_slots
+        from voice_replace.timeline import load_segment_timestamps
+
+        segments = load_segment_timestamps(output_dir)
+        if not segments:
+            print("[错误] 未找到 Whisper 转写的时间戳数据，请先运行提取步骤", file=sys.stderr)
+            return 1
+
+        print("\n" + "=" * 60)
+        print("🧠 步骤 3/5：大模型根据主题创作新台词")
+        print("=" * 60)
+        print(f"  主题: {args.topic}")
+        print(f"  原视频片段数: {len(segments)}")
+
+        slots = segments_as_slots(segments)
+        generated_lines = generate_text_from_topic(
+            topic=args.topic,
+            segments=slots,
+            api_key=args.llm_api_key,
+            base_url=args.llm_base_url,
+            model=args.llm_model,
+        )
+
+        if generated_lines is None:
+            print("[错误] 大模型创作失败，请检查网络或 API Key", file=sys.stderr)
+            return 1
+
+        # 将生成的台词保存为临时文件
+        generated_text_path = os.path.join(output_dir, "generated_script.txt")
+        with open(generated_text_path, "w", encoding="utf-8") as f:
+            f.write(f"# 大模型根据主题自动创作的台词\n")
+            f.write(f"# 主题: {args.topic}\n\n")
+            for line in generated_lines:
+                f.write(f"{line}\n")
+
+        print(f"\n  📝 生成的台词已保存: {generated_text_path}")
+        print(f"  台词预览:")
+        for i, line in enumerate(generated_lines):
+            print(f"    第{i + 1}句: {line}")
+
+        new_text_path = generated_text_path
+    else:
+        # 新文本模式：验证文件存在
+        new_text_path = os.path.abspath(args.new_text)
+        if not os.path.isfile(new_text_path):
+            print(f"[错误] 新文本文件不存在: {new_text_path}", file=sys.stderr)
+            return 1
 
     # 获取原视频时长（使用去字幕后的视频）
     video_duration = get_duration(effective_video)
