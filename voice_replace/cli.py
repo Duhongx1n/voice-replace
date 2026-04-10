@@ -1,24 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-视频语音替换工具 — 命令行入口。
+视频语音替换工具 - 命令行入口。
 
 完整流程：
 1. 从原始视频中提取语音并转写为文字（Whisper）
 2. 从原始视频中提取音色参考片段（Demucs + 智能筛选）
-3. 用户修改文字内容（手动编辑 Markdown 文件）
+3. 大模型智能分句 - 自动将用户的自由格式新台词按原视频节奏拆分
 4. 用克隆的原音色朗读新内容（Qwen3-TTS 时间轴对齐合成）
 5. 用 FFmpeg 将新音频替换回原视频
 
 使用方法：
+    # 推荐：一步到位 - 准备新台词文本，大模型自动分句对齐
+    python -m voice_replace --input 原始视频.mp4 --output_dir 输出目录 \\
+        --new_text 新台词.txt
+
+    # 手动模式（精确控制每句台词）：
     # 第一步：提取原视频文字 + 音色参考（自动完成）
     python -m voice_replace --input 原始视频.mp4 --output_dir 输出目录
-
-    # 第二步：手动编辑 输出目录/transcript_for_edit.md
-
+    # 第二步：编辑 输出目录/transcript_for_edit.md
     # 第三步：用修改后的文字生成新音频并替换
     python -m voice_replace --input 原始视频.mp4 --output_dir 输出目录 \\
-        --new_text 输出目录/transcript_for_edit.md
+        --new_text 输出目录/transcript_for_edit.md --skip_extract
 """
 
 from __future__ import annotations
@@ -82,23 +85,24 @@ def ensure_environment() -> None:
 def parse_args() -> argparse.Namespace:
     """解析命令行参数。"""
     parser = argparse.ArgumentParser(
-        description="视频语音替换工具 — 替换视频中的语言内容，保持原音色不变",
+        description="视频语音替换工具 - 替换视频中的语言内容，保持原音色不变",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用示例：
 
-  # 第一步：提取原视频文字和音色（自动完成）
+  # 推荐：一步到位 - 准备新台词，大模型自动分句对齐
+  python -m voice_replace --input video.mp4 --output_dir output \\
+      --new_text my_script.txt
+
+  # 指定其他大模型
+  python -m voice_replace --input video.mp4 --output_dir output \\
+      --new_text my_script.txt --llm_model Kimi-K2.5
+
+  # 手动模式：先提取，再编辑，最后生成
   python -m voice_replace --input video.mp4 --output_dir output
-
-  # 第二步：手动编辑 output/transcript_for_edit.md
-
-  # 第三步：用修改后的文字生成新视频
+  # （编辑 output/transcript_for_edit.md）
   python -m voice_replace --input video.mp4 --output_dir output \\
-      --new_text output/transcript_for_edit.md
-
-  # 一步到位：直接提供新文本文件
-  python -m voice_replace --input video.mp4 --output_dir output \\
-      --new_text new_script.md
+      --new_text output/transcript_for_edit.md --skip_extract
         """,
     )
 
@@ -278,9 +282,14 @@ def main() -> int:
         print(f"\n  原始转写文本: {transcript_path}")
         print(f"  可编辑文本:   {edit_path}")
         print(f"  参考音频:     {ref_voice_path}")
-        print(f"\n📝 下一步：")
-        print(f"  1. 编辑文件: {edit_path}")
-        print(f"  2. 重新运行：")
+        print(f"\n📝 下一步（二选一）：")
+        print(f"\n  🚀 推荐：准备一段新台词文本，大模型自动分句对齐")
+        print(f"     python -m voice_replace \\")
+        print(f"       --input {input_video} \\")
+        print(f"       --output_dir {output_dir} \\")
+        print(f"       --new_text 新台词.txt \\")
+        print(f"       --skip_extract")
+        print(f"\n  ✏️  手动：逐句编辑 {edit_path}")
         print(f"     python -m voice_replace \\")
         print(f"       --input {input_video} \\")
         print(f"       --output_dir {output_dir} \\")
