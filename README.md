@@ -11,6 +11,7 @@
 - [完整使用流程](#完整使用流程)
 - [命令行参数](#命令行参数)
 - [技术架构](#技术架构)
+- [字幕去除（可选）](#字幕去除可选)
 - [常见问题](#常见问题)
 
 ---
@@ -28,6 +29,7 @@
 - **背景音处理**：自动分离并混合背景音乐（BGM），同时抑制观众笑声等瞬态杂音
 - **声音克隆**：用原音色朗读新内容（Qwen3-TTS）
 - **时间轴对齐**：新语音按原视频的时间节奏精确插入，保持画面与语音同步
+- **字幕去除**（可选）：支持 FFmpeg 模糊 / PaddleOCR + inpainting / VSE 三种模式去除硬字幕
 - **视频合成**：将新音频无损替换回原视频（FFmpeg）
 
 ### 三种台词模式
@@ -276,6 +278,9 @@ voice-replace --input video.mp4 --output_dir output \
 | `--bgm_volume` | ❌ | `0.15` | 背景音音量比例（0.0~1.0，设为 0 等同禁用） |
 | `--no_bgm` | ❌ | `false` | 禁用背景音混合（仅保留新语音） |
 | `--skip_extract` | ❌ | `false` | 跳过步骤 1-2（已有提取结果时使用） |
+| `--remove_subtitle` | ❌ | `false` | 启用字幕去除预处理（去除视频中的硬字幕） |
+| `--subtitle_mode` | ❌ | `fast` | 字幕去除模式（fast/auto/vse/smart） |
+| `--subtitle_region` | ❌ | 自动检测 | 手动指定字幕区域（格式: y_start,y_end,x_start,x_end） |
 | `--llm_api_key` | ❌ | 内置 HAI Key | 大模型 API Key（已内置，通常无需设置） |
 | `--llm_base_url` | ❌ | HAI 平台 | 大模型 API Base URL（已内置，通常无需设置） |
 | `--llm_model` | ❌ | `DeepSeek-V3.1` | 大模型名称（HAI 平台可用模型见下表） |
@@ -360,6 +365,46 @@ cli.py（命令行入口）
 | HAI 大模型平台（内置） | 智能创作/分句 | 已内置 DeepSeek-V3.1，开箱即用 |
 
 ---
+
+## 字幕去除（可选）
+
+如果原视频中有硬字幕（烧录在画面上的字幕），可以在处理前先去除，避免最终视频中出现原字幕。
+
+> **注意**：字幕去除默认**关闭**，需要手动添加 `--remove_subtitle` 参数开启。
+
+### 快速使用
+
+```bash
+# 开启字幕去除（默认 FFmpeg 模糊模式，速度快）
+voice-replace --input video.mp4 --output_dir output \
+    --topic "你的主题" --remove_subtitle
+
+# 手动指定字幕区域（更精确）
+voice-replace --input video.mp4 --output_dir output \
+    --topic "你的主题" --remove_subtitle \
+    --subtitle_region 680,720,100,1180
+```
+
+### 字幕去除模式
+
+| 模式 | 参数值 | 速度 | 效果 | 额外依赖 |
+|------|--------|------|------|----------|
+| **FFmpeg 模糊** | `fast`（默认） | ⚡⚡⚡ | ★★ | 无 |
+| **PaddleOCR + inpainting** | `smart` | 🐢 | ★★★★ | `paddlepaddle` `paddleocr` |
+| **VSE 引擎** | `vse` | 🐢🐢 | ★★★★★ | VSE + `paddlepaddle` |
+| **自动选择** | `auto` | — | — | 自动降级 |
+
+```bash
+# 使用智能模式（需安装 PaddleOCR）
+voice-replace --input video.mp4 --output_dir output \
+    --topic "你的主题" --remove_subtitle --subtitle_mode smart
+
+# 安装智能模式依赖
+pip install paddlepaddle paddleocr opencv-python-headless
+```
+
+---
+
 ![alt text](image.png)
 
 ## 常见问题
@@ -443,6 +488,14 @@ pip install edge-tts
 
 # 在代码中使用（需修改 timeline.py 中的引擎初始化）
 ```
+
+### Q: 字幕去除效果不好？
+
+字幕去除默认使用 FFmpeg 模糊模式（`fast`），速度快但效果一般。如需更好效果：
+
+1. **安装 PaddleOCR** 使用智能模式：`pip install paddlepaddle paddleocr opencv-python-headless`
+2. 运行时指定：`--remove_subtitle --subtitle_mode smart`
+3. 如果自动检测的字幕区域不准确，可以手动指定：`--subtitle_region y_start,y_end,x_start,x_end`
 
 ### Q: 支持哪些视频格式？
 

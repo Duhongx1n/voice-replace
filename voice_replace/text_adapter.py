@@ -56,7 +56,12 @@ def _build_system_prompt() -> str:
         "按照原视频的分句节奏和对话结构进行智能拆分。\n\n"
         "核心规则：\n"
         "1. 输出的句子数量必须与原视频的片段数量完全一致\n"
-        "2. 每句新台词的字数应尽量与对应原始片段的字数比例接近（因为字数影响语音时长）\n"
+        "2. ⭐⭐【最重要】每句新台词的字数必须严格匹配原始片段的字数！\n"
+        "   - 每句都有一个「目标字数范围」，你的输出必须落在这个范围内\n"
+        "   - 字数不够时必须扩写（加修饰词、补充细节、添加语气词等）\n"
+        "   - 字数太多时必须精简压缩\n"
+        "   - 这是因为每句台词会被合成语音并填入固定时长的时间槽，"
+        "字数太少会导致语音结束后出现空白（但视频中人物嘴还在动）\n"
         "3. 每句必须是语义完整的、可以独立朗读的句子或短语\n"
         "4. 不要在句子中间断开一个词语或成语\n"
         "5. 保持新台词的整体语义和逻辑连贯性\n"
@@ -86,7 +91,12 @@ def _build_generation_system_prompt() -> str:
         "参考原视频的对话结构和节奏，创作全新的台词内容。\n\n"
         "核心规则：\n"
         "1. 输出的句子数量必须与原视频的片段数量完全一致\n"
-        "2. 每句新台词的字数应尽量与对应原始片段的字数比例接近（因为字数影响语音时长）\n"
+        "2. ⭐⭐【最重要】每句新台词的字数必须严格匹配原始片段的字数！\n"
+        "   - 每句都有一个「目标字数范围」，你的输出必须落在这个范围内\n"
+        "   - 字数不够时必须扩写（加修饰词、补充细节、添加语气词等）\n"
+        "   - 字数太多时必须精简压缩\n"
+        "   - 这是因为每句台词会被合成语音并填入固定时长的时间槽，"
+        "字数太少会导致语音结束后出现空白（但视频中人物嘴还在动）\n"
         "3. 每句必须是语义完整的、可以独立朗读的句子或短语\n"
         "4. 不要在句子中间断开一个词语或成语\n"
         "5. 新台词的整体语义和逻辑必须连贯，围绕用户给出的主题展开\n"
@@ -141,20 +151,35 @@ def _build_user_prompt(
     role_count = len(roles_used)
     dialogue_mode = "多人对话" if role_count > 1 else "单人独白"
 
+    # 构建每句的目标字数范围
+    char_range_lines = []
+    for i, a in enumerate(annotated):
+        char_count = a["char_count"]
+        # 计算允许的字数范围（±20%，最少1字）
+        min_chars = max(1, int(char_count * 0.8))
+        max_chars = max(min_chars + 1, int(char_count * 1.2))
+        char_range_lines.append(
+            f"  第{i + 1}句: 目标 {char_count} 字（允许范围: {min_chars}-{max_chars} 字）"
+        )
+    char_range_info = "\n".join(char_range_lines)
+
     prompt = (
         f"## 原视频对话结构分析\n\n"
         f"对话模式: {dialogue_mode}（推断出 {role_count} 个角色）\n\n"
         f"## 原视频分句信息（共 {num_segments} 个片段，总计 {total_chars} 字）\n\n"
         f"{seg_info}\n\n"
+        f"## 每句目标字数范围（必须严格遵守！）\n\n"
+        f"{char_range_info}\n\n"
         f"## 新台词内容\n\n"
         f"{new_text}\n\n"
         f"## 任务\n\n"
         f"请将上面的「新台词内容」拆分为恰好 {num_segments} 句，"
-        f"使每句的字数尽量与对应原始片段的字数比例接近。\n\n"
+        f"每句的字数必须落在对应的目标字数范围内。\n\n"
         f"重要要求：\n"
-        f"1. 保持原视频的对话结构：原文是短回应的地方，新台词也应该是短回应\n"
-        f"2. 原文是提问的地方，新台词也应该是提问\n"
-        f"3. 角色切换处保持自然过渡\n\n"
+        f"1. ⭐ 每句字数必须在目标范围内，字数不够要扩写，字数太多要精简\n"
+        f"2. 保持原视频的对话结构：原文是短回应的地方，新台词也应该是短回应\n"
+        f"3. 原文是提问的地方，新台词也应该是提问\n"
+        f"4. 角色切换处保持自然过渡\n\n"
         f"直接输出 JSON 数组，格式如：\n"
         f'[\"\u7b2c\u4e00\u53e5\u53f0\u8bcd\", \"\u7b2c\u4e8c\u53e5\u53f0\u8bcd\", ...]\n\n'
         f"注意：数组长度必须恰好为 {num_segments}。"
@@ -203,6 +228,18 @@ def _build_topic_generation_prompt(
     role_count = len(roles_used)
     dialogue_mode = "多人对话" if role_count > 1 else "单人独白"
 
+    # 构建每句的目标字数范围
+    char_range_lines = []
+    for i, a in enumerate(annotated):
+        char_count = a["char_count"]
+        # 计算允许的字数范围（±20%，最少1字）
+        min_chars = max(1, int(char_count * 0.8))
+        max_chars = max(min_chars + 1, int(char_count * 1.2))
+        char_range_lines.append(
+            f"  第{i + 1}句: 目标 {char_count} 字（允许范围: {min_chars}-{max_chars} 字）"
+        )
+    char_range_info = "\n".join(char_range_lines)
+
     prompt = (
         f"## 创作主题/方向\n\n"
         f"{topic}\n\n"
@@ -210,17 +247,22 @@ def _build_topic_generation_prompt(
         f"对话模式: {dialogue_mode}（推断出 {role_count} 个角色）\n\n"
         f"## 原视频分句信息（共 {num_segments} 个片段，总计 {total_chars} 字）\n\n"
         f"{seg_info}\n\n"
+        f"## 每句目标字数范围（必须严格遵守！）\n\n"
+        f"{char_range_info}\n\n"
         f"## 任务\n\n"
         f"请围绕上面的「创作主题/方向」，参考原视频的对话结构，"
         f"创作恰好 {num_segments} 句全新的台词。\n\n"
-        f"重要要求：\n"
-        f"1. 每句新台词的字数尽量与对应原始片段的字数比例接近\n"
-        f"2. 保持原视频的对话结构：原文是短回应的地方，新台词也应该是短回应\n"
-        f"3. 原文是提问的地方，新台词也应该是提问\n"
-        f"4. 角色切换处保持自然过渡\n"
-        f"5. 台词内容必须围绕给定的主题展开，不要照搬原文\n\n"
+        f"⭐⭐ 最重要的要求 — 字数匹配：\n"
+        f"每句新台词的字数必须落在上面给出的「目标字数范围」内！\n"
+        f"字数太少会导致语音播完后出现空白（但视频中人物嘴还在动），非常不自然。\n"
+        f"字数不够时请扩写（加修饰词、补充细节、添加语气词等）。\n\n"
+        f"其他要求：\n"
+        f"1. 保持原视频的对话结构：原文是短回应的地方，新台词也应该是短回应\n"
+        f"2. 原文是提问的地方，新台词也应该是提问\n"
+        f"3. 角色切换处保持自然过渡\n"
+        f"4. 台词内容必须围绕给定的主题展开，不要照搬原文\n\n"
         f"直接输出 JSON 数组，格式如：\n"
-        f'["\u7b2c\u4e00\u53e5\u53f0\u8bcd", "\u7b2c\u4e8c\u53e5\u53f0\u8bcd", ...]\n\n'
+        f'["第一句台词", "第二句台词", ...]\n\n'
         f"注意：数组长度必须恰好为 {num_segments}。"
     )
 
@@ -338,7 +380,7 @@ def adapt_text_with_llm(
     api_key: str = "",
     base_url: str = "",
     model: str = "",
-    max_retries: int = 2,
+    max_retries: int = 3,
 ) -> Optional[List[str]]:
     """
     调用大模型将新台词按原视频节奏拆分。
@@ -441,6 +483,42 @@ def adapt_text_with_llm(
                 )
                 continue
 
+            # 验证字数偏差（允许 ±30%，超出则提示重试）
+            bad_lines = []
+            for idx, (seg, line) in enumerate(zip(segments, result)):
+                orig_text = seg.get("original_text", seg.get("text", "")).strip()
+                orig_len = len(orig_text)
+                new_len = len(line)
+                if orig_len == 0:
+                    continue
+                min_ok = max(1, int(orig_len * 0.7))
+                max_ok = max(min_ok + 1, int(orig_len * 1.3))
+                if new_len < min_ok or new_len > max_ok:
+                    bad_lines.append(
+                        f"第{idx + 1}句: 目标{orig_len}字, "
+                        f"实际{new_len}字, 范围{min_ok}-{max_ok}"
+                    )
+            if bad_lines and attempt < max_retries - 1:
+                print(
+                    f"  [大模型分句] 第 {attempt + 1} 次: "
+                    f"{len(bad_lines)} 句字数偏差过大，重试..."
+                )
+                for bl in bad_lines[:5]:
+                    print(f"    {bl}")
+                deviation_info = "; ".join(bad_lines)
+                user_prompt += (
+                    f"\n\n⚠️ 上次返回的台词有 {len(bad_lines)} 句字数偏差过大："
+                    f"\n{deviation_info}"
+                    f"\n请严格按照每句的目标字数范围重新拆分！"
+                )
+                continue
+
+            if bad_lines:
+                print(
+                    f"  [大模型分句] ⚠️ 仍有 {len(bad_lines)} 句字数偏差，"
+                    f"但已达最大重试次数，使用当前结果"
+                )
+
             print(f"  [大模型分句] ✅ 成功拆分为 {len(result)} 句")
             return result
 
@@ -460,7 +538,7 @@ def generate_text_from_topic(
     api_key: str = "",
     base_url: str = "",
     model: str = "",
-    max_retries: int = 2,
+    max_retries: int = 3,
 ) -> Optional[List[str]]:
     """
     根据主题/方向，调用大模型自动创作与原视频时间轴匹配的新台词。
@@ -561,6 +639,42 @@ def generate_text_from_topic(
                     f"有 {empty_count} 句为空，重试..."
                 )
                 continue
+
+            # 验证字数偏差（允许 ±30%，超出则提示重试）
+            bad_lines = []
+            for idx, (seg, line) in enumerate(zip(segments, result)):
+                orig_text = seg.get("original_text", seg.get("text", "")).strip()
+                orig_len = len(orig_text)
+                new_len = len(line)
+                if orig_len == 0:
+                    continue
+                min_ok = max(1, int(orig_len * 0.7))
+                max_ok = max(min_ok + 1, int(orig_len * 1.3))
+                if new_len < min_ok or new_len > max_ok:
+                    bad_lines.append(
+                        f"第{idx + 1}句: 目标{orig_len}字, "
+                        f"实际{new_len}字, 范围{min_ok}-{max_ok}"
+                    )
+            if bad_lines and attempt < max_retries - 1:
+                print(
+                    f"  [大模型创作] 第 {attempt + 1} 次: "
+                    f"{len(bad_lines)} 句字数偏差过大，重试..."
+                )
+                for bl in bad_lines[:5]:
+                    print(f"    {bl}")
+                deviation_info = "; ".join(bad_lines)
+                user_prompt += (
+                    f"\n\n⚠️ 上次返回的台词有 {len(bad_lines)} 句字数偏差过大："
+                    f"\n{deviation_info}"
+                    f"\n请严格按照每句的目标字数范围重新创作！"
+                )
+                continue
+
+            if bad_lines:
+                print(
+                    f"  [大模型创作] ⚠️ 仍有 {len(bad_lines)} 句字数偏差，"
+                    f"但已达最大重试次数，使用当前结果"
+                )
 
             print(f"  [大模型创作] ✅ 成功创作 {len(result)} 句新台词")
             return result

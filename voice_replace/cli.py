@@ -169,19 +169,19 @@ def parse_args() -> argparse.Namespace:
         help="跳过步骤 1-2（已有提取结果时使用）",
     )
 
-    # 字幕去除参数
+    # 字幕去除参数（默认关闭，需手动开启）
     parser.add_argument(
         "--remove_subtitle", action="store_true",
         help="启用字幕去除预处理（去除视频中的硬字幕）",
     )
     parser.add_argument(
-        "--subtitle_mode", default="auto",
+        "--subtitle_mode", default="fast",
         choices=["auto", "vse", "smart", "fast"],
-        help="字幕去除模式（默认: auto）。"
+        help="字幕去除模式（默认: fast）。"
+             "fast: FFmpeg 模糊（速度快，默认）；"
              "auto: 自动选择（优先 VSE → 智能模式 → 快速模式）；"
              "vse: Video-subtitle-extractor 引擎（效果最好）；"
-             "smart: PaddleOCR + inpainting（效果好但慢）；"
-             "fast: FFmpeg 模糊（速度快但效果一般）",
+             "smart: PaddleOCR + inpainting（效果好但慢）",
     )
     parser.add_argument(
         "--subtitle_region", default="",
@@ -238,7 +238,9 @@ def main() -> int:
     print(f"  输入视频: {input_video}")
     print(f"  输出目录: {output_dir}")
     if args.remove_subtitle:
-        print("  字幕去除: ✅ 已启用")
+        print(f"  字幕去除: ✅ 已启用（模式: {args.subtitle_mode}）")
+    else:
+        print("  字幕去除: ❌ 已禁用（使用 --remove_subtitle 开启）")
     if args.topic:
         print(f"  创作主题: {args.topic}")
         print("  模式: 🔥 主题创作（大模型自动生成新台词，步骤 0-5）")
